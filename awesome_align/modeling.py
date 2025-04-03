@@ -663,7 +663,7 @@ class BertForMaskedLM(BertPreTrainedModel):
             return masked_lm_loss
 
         if guide is None:
-            raise ValueError('must specify labels for the self-trianing objective')
+            raise ValueError('must specify labels for the self-training objective')
 
         outputs_tgt = self.bert(
             inputs_tgt,
