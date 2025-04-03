@@ -563,7 +563,7 @@ class BertGuideHead(nn.Module):
         len_src = torch.sum(1-attention_mask_src, -1)
         len_tgt = torch.sum(1-attention_mask_tgt, -1)
         attention_mask_src = return_extended_attention_mask(1-attention_mask_src, hidden_states_src.dtype)
-        attention_mask_tgt = return_extended_attention_mask(1-attention_mask_tgt, hidden_states_src.dtype)
+        attention_mask_tgt = return_extended_attention_mask(1-attention_mask_tgt, hidden_states_tgt.dtype)
 
         #qkv
         query_src = self.transpose_for_scores(hidden_states_src)
