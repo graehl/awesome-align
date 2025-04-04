@@ -297,6 +297,47 @@ def write_onnx_layers(model, onnx_file_path, max_layer=None,
   else:
     return f"Model exported to {onnx_file_path}"
 
+def init_model_and_tokenizer(
+    model_name_or_path,
+    config_name = None,
+    cache_dir = None,
+    tokenizer_name = None,
+):
+  config_class, model_class, tokenizer_class = BertConfig, BertForMaskedLM, BertTokenizer
+  if config_name:
+      config = config_class.from_pretrained(config_name, cache_dir=cache_dir)
+  elif model_name_or_path:
+      config = config_class.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+  else:
+      config = config_class()
+
+  if tokenizer_name:
+      tokenizer = tokenizer_class.from_pretrained(tokenizer_name, cache_dir=cache_dir)
+  elif model_name_or_path:
+      tokenizer = tokenizer_class.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+  else:
+      raise ValueError(
+          "You are instantiating a new {} tokenizer. This is not supported, but you can do it from another script, save it,"
+          "and load it from here, using --tokenizer_name".format(tokenizer_class.__name__)
+      )
+
+  # pad is actually always 0
+  modeling.PAD_ID = tokenizer.pad_token_id
+  modeling.CLS_ID = tokenizer.cls_token_id
+  modeling.SEP_ID = tokenizer.sep_token_id
+
+  if model_name_or_path:
+      model = model_class.from_pretrained(
+          model_name_or_path,
+          from_tf=bool(".ckpt" in model_name_or_path),
+          config=config,
+          cache_dir=cache_dir,
+      )
+  else:
+      model = model_class(config=config)
+
+  return model, tokenizer
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -369,41 +410,12 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.device = device
 
-    # Set seed
     set_seed(args)
-    config_class, model_class, tokenizer_class = BertConfig, BertForMaskedLM, BertTokenizer
-    if args.config_name:
-        config = config_class.from_pretrained(args.config_name, cache_dir=args.cache_dir)
-    elif args.model_name_or_path:
-        config = config_class.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
-    else:
-        config = config_class()
 
-    if args.tokenizer_name:
-        tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name, cache_dir=args.cache_dir)
-    elif args.model_name_or_path:
-        tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
-    else:
-        raise ValueError(
-            "You are instantiating a new {} tokenizer. This is not supported, but you can do it from another script, save it,"
-            "and load it from here, using --tokenizer_name".format(tokenizer_class.__name__)
-        )
-
-    modeling.PAD_ID = tokenizer.pad_token_id
-    modeling.CLS_ID = tokenizer.cls_token_id
-    modeling.SEP_ID = tokenizer.sep_token_id
+    model, tokenizer = init_model_and_tokenizer(args.model_name_or_path, args.config_name, args.cache_dir, args.tokenizer_name)
 
     if args.output_onnx is not None:
         write_onnx_layers(model, args.output_onnx, max_layer=args.max_layer)
-    if args.model_name_or_path:
-        model = model_class.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            cache_dir=args.cache_dir,
-        )
-    else:
-        model = model_class(config=config)
 
     word_align(args, model, tokenizer)
 
