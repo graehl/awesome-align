@@ -349,8 +349,7 @@ def main():
     parser.add_argument(
         "--output_file",
         type=str,
-        required=True,
-        help="The output file."
+        help="The output file (required unless output_onnx)."
     )
     parser.add_argument("--align_layer", type=int, default=8, help="layer for alignment extraction")
     parser.add_argument(
