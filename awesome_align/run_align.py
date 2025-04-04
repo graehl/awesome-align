@@ -56,11 +56,11 @@ class LineByLineTextDataset(IterableDataset):
     def process_line(self, worker_id, line):
         if len(line) == 0 or line.isspace() or not len(line.split(' ||| ')) == 2:
             return None
-        
+
         src, tgt = line.split(' ||| ')
         if src.rstrip() == '' or tgt.rstrip() == '':
             return None
-    
+
         sent_src, sent_tgt = src.strip().split(), tgt.strip().split()
         token_src, token_tgt = [self.tokenizer.tokenize(word) for word in sent_src], [self.tokenizer.tokenize(word) for word in sent_tgt]
         wid_src, wid_tgt = [self.tokenizer.convert_tokens_to_ids(x) for x in token_src], [self.tokenizer.convert_tokens_to_ids(x) for x in token_tgt]
@@ -75,7 +75,7 @@ class LineByLineTextDataset(IterableDataset):
         bpe2word_map_tgt = []
         for i, word_list in enumerate(token_tgt):
             bpe2word_map_tgt += [i for x in word_list]
-        return (worker_id, ids_src[0], ids_tgt[0], bpe2word_map_src, bpe2word_map_tgt, sent_src, sent_tgt) 
+        return (worker_id, ids_src[0], ids_tgt[0], bpe2word_map_src, bpe2word_map_tgt, sent_src, sent_tgt)
 
     def __iter__(self):
         if self.offsets is not None:
@@ -146,6 +146,11 @@ def merge_files(writers):
 
 def word_align(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer):
 
+    if args.data_file is None:
+        if args.output_onnx is None:
+            raise ValueError('set data_file or output_onnx')
+        return
+
     def collate(examples):
         worker_ids, ids_src, ids_tgt, bpe2word_map_src, bpe2word_map_tgt, sents_src, sents_tgt = zip(*examples)
         ids_src = pad_sequence(ids_src, batch_first=True, padding_value=tokenizer.pad_token_id)
@@ -162,7 +167,7 @@ def word_align(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer):
     model.eval()
     tqdm_iterator = trange(0, desc="Extracting")
 
-    writers = open_writer_list(args.output_file, args.num_workers) 
+    writers = open_writer_list(args.output_file, args.num_workers)
     if args.output_prob_file is not None:
         prob_writers = open_writer_list(args.output_prob_file, args.num_workers)
     if args.output_word_file is not None:
@@ -198,13 +203,107 @@ def word_align(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer):
     if args.output_word_file is not None:
         merge_files(word_writers)
 
+def return_extended_attention_mask(attention_mask, dtype):
+    if attention_mask.dim() == 3:
+        extended_attention_mask = attention_mask[:, None, :, :]
+    elif attention_mask.dim() == 2:
+        extended_attention_mask = attention_mask[:, None, None, :]
+    else:
+        raise ValueError(
+             "Wrong shape for input_ids or attention_mask"
+        )
+    extended_attention_mask = extended_attention_mask.to(dtype=dtype)
+    extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+    return extended_attention_mask
+
+def guess_dtype(model):
+  if hasattr(model, 'get_parameter_dtype'):
+    return model.get_parameter_dtype()
+  elif hasattr(model, 'parameters'):
+    return next(model.parameters()).dtype
+  else:
+    return torch.float32
+
+class ExportNthLayer(torch.nn.Module):
+    def __init__(self, base_model, align_layer_max=8):
+        super().__init__()
+        e = base_model.bert if hasattr(base_model, 'bert') else base_model
+        self.bert = e
+        self.embeddings = e.embeddings
+        # For BERT, num_hidden_layers is in config
+        self.config = e.config
+        self.num_layers = min(e.config.num_hidden_layers, align_layer_max)
+        e = e.encoder if hasattr(e, 'encoder') else e
+        self.encoder = e
+        self.layer = e.layer[:self.num_layers]
+        print(f'{self.layer}')
+
+    def forward(self, ids, attention_mask=None, position_ids=None):
+      shape = ids.size()
+      device = ids.device
+      if attention_mask is None:
+        attention_mask = torch.ones(shape, device=device)
+        attention_mask[ids==0] = 0
+      token_type_ids = torch.zeros(shape, dtype=torch.long, device=device)
+
+      # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
+      # ourselves in which case we just need to make it broadcastable to all heads.
+      extended_attention_mask = return_extended_attention_mask(attention_mask, guess_dtype(self.bert))
+
+      hidden_states = self.embeddings(ids, token_type_ids=token_type_ids, position_ids=position_ids)
+
+      if self.layer is not None:
+        for i, layer in enumerate(self.layer):
+          hidden_states = layer(hidden_states, attention_mask=extended_attention_mask)
+        return hidden_states
+      else:
+        return self.bert(ids, attention_mask)
+
+def write_onnx_layers(model, onnx_file_path, max_layer=None,
+                      inputs=['input_ids', 'attention_mask'],
+                      outputs=['output'],
+                      dynamic=True, batch=True, opset_version=14, return_tensor_names=False):
+  captions = {0 : 'batch_size', 1: 'sequence_length'} if batch else {0 : 'sequence_length'}
+  dynamic_axes = {}
+  if dynamic:
+    for k in inputs:
+      dynamic_axes[k] = captions
+    for k in outputs:
+      dynamic_axes[k] = captions
+
+  # Create dummy input data
+  batch_size = 1
+  sequence_length = 128
+  dims = (batch_size, sequence_length) if batch else (sequence_length,)
+  inputs_ones = tuple(torch.ones(dims) if x != 'input_ids' else torch.randint(0, model.config.vocab_size, dims) for x in inputs)
+
+  # TODO: figure out how to do first nth encoder layers for automodel bert?
+  model = ExportNthLayer(model, max_layer) if max_layer is not None else (model.bert if hasattr(model, 'bert') else model)
+  torch.onnx.export(
+      model,
+      inputs_ones, #(input_ids, attention_mask),
+      onnx_file_path,
+      export_params=True,
+      opset_version=opset_version,
+      do_constant_folding=True,
+      input_names = inputs,
+      output_names = outputs,
+      dynamic_axes=dynamic_axes,
+  )
+
+  if return_tensor_names:
+    om = onnx_helper.load_onnx_model(onnx_file_path)
+    return list(onnx_helper.enumerate_model_node_outputs(om))
+  else:
+    return f"Model exported to {onnx_file_path}"
+
 
 def main():
     parser = argparse.ArgumentParser()
 
     # Required parameters
     parser.add_argument(
-        "--data_file", default=None, type=str, required=True, help="The input data file (a text file)."
+        "--data_file", default=None, type=str, help="The input data file (a text file)."
     )
     parser.add_argument(
         "--output_file",
@@ -243,6 +342,19 @@ def main():
         type=str,
         help="Optional pretrained tokenizer name or path if not the same as model_name_or_path. If both are None, initialize a new tokenizer.",
     )
+    parser.add_argument(
+        "--output_onnx",
+        default=None,
+        type=str,
+        help="Optionally write onnx conversion of model",
+    )
+    parser.add_argument(
+        "--max_layer",
+        type=int,
+        default=None,
+        help="Limit onnx conversion to this many encoder layers",
+    )
+
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
     parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument(
@@ -281,6 +393,8 @@ def main():
     modeling.CLS_ID = tokenizer.cls_token_id
     modeling.SEP_ID = tokenizer.sep_token_id
 
+    if args.output_onnx is not None:
+        write_onnx_layers(model, args.output_onnx, max_layer=args.max_layer)
     if args.model_name_or_path:
         model = model_class.from_pretrained(
             args.model_name_or_path,
