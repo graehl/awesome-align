@@ -25,19 +25,22 @@ def modify_onnx_outputs(path, onnxpathout, outputs, inputs=None, checker=True):
 
 @onnxoutapp.command()
 def main(in_model: Annotated[str, typer.Argument(help="onnx input model")],
-         name: Annotated[str, typer.Argument(help="tensor name to outputs")] = "",
+         name: Annotated[str, typer.Argument(help="tensor name to outputs")] = "/layer.7/output/LayerNorm/Add_1_output_0",
          out_model: Annotated[str, typer.Argument(help="onnx output model (if empty, same as in_model)")] = "",
          list_tensors: bool = typer.Option(False, "--list", "-l", help="list tensors (do not write out_model)"),
 ):
     log("loading %s" % in_model)
     if list_tensors:
+        log("listing tensors in %s" % in_model)
         model = onnx.load(in_model)
-        graph = model.graph
-        for name in enumerate_model_node_outputs(model):
-            print(name)
-        log(graph.value_info)
-        for value_info_proto in graph.value_info:
-            log(value_info_proto.name)
+        log("loaded %s" % in_model)
+        seen = set()
+        for node in model.graph.node:
+           if node not in seen:
+              seen.insert(node)
+              log(f"saw {node.name}")
+              for out in node.output:
+                 print(out.name)
         return
     if not len(name):
         log("specify tensorname [onnx-outfile] or -l")
