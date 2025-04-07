@@ -30,7 +30,7 @@ def main(in_model: Annotated[str, typer.Argument(help="onnx input model")],
 ):
     log("loading %s" % in_model)
     if list_tensors:
-        model = load_onnx_model(in_model)
+        model = onnx.load(in_model)
         graph = model.graph
         for name in enumerate_model_node_outputs(model):
             print(name)
