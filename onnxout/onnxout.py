@@ -28,19 +28,24 @@ def main(in_model: Annotated[str, typer.Argument(help="onnx input model")],
          name: Annotated[str, typer.Argument(help="tensor name to outputs")] = "/layer.7/output/LayerNorm/Add_1_output_0",
          out_model: Annotated[str, typer.Argument(help="onnx output model (if empty, same as in_model)")] = "",
          list_tensors: bool = typer.Option(False, "--list", "-l", help="list tensors (do not write out_model)"),
+         startswith: str = typer.Option(None, "--startswith", "-s", help="list tensors starting with this (do not write out_model)"),
 ):
     log("loading %s" % in_model)
-    if list_tensors:
+    if list_tensors or startswith:
         log("listing tensors in %s" % in_model)
         model = onnx.load(in_model)
         log("loaded %s" % in_model)
+        for x in model.graph.input:
+           log(f'graph input {x.name}')
+        for x in model.graph.output:
+           log(f'graph output {x.name}')
         seen = set()
-        for node in model.graph.node:
-           if node not in seen:
-              seen.insert(node)
-              log(f"saw {node.name}")
-              for out in node.output:
-                 print(out.name)
+        for n in model.graph.node:
+           if n.name not in seen:
+              seen.add(n.name)
+              for oname in n.output:
+                 if startswith is None or oname.startswith(startswith):
+                    print(f'{oname}')
         return
     if not len(name):
         log("specify tensorname [onnx-outfile] or -l")
