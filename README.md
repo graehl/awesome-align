@@ -2,6 +2,25 @@
 
 `awesome-align` is a tool that can extract word alignments from multilingual BERT (mBERT) [[Demo]](https://colab.research.google.com/drive/1205ubqebM0OsZa1nRgbGJBtitgHqIVv6?usp=sharing) and allows you to fine-tune mBERT on parallel corpora for better alignment quality (see [our paper](https://arxiv.org/abs/2101.08231) for more details).
 
+### exporting (fine tuned or not) awesome-align to ONNX
+
+ONNX requires *in the exported onnx file*
+the specific encoder layer tensor be designated an output.
+
+Therefore (as in `demo.export.sh`):
+
+```
+pip install -r requirements.txt
+#python setup.py install
+PYTHONPATH=.:$PYTHONPATH python awesome_align/run_align.py --model_name_or_path=bert-base-multilingual-cased --output_onnx=e9.onnx --max_layer=9
+```
+
+Alternatively you can use on an arbitrary already exported onnx model the script
+`python ./onnx-output-also.py bertm.onnx [tensorname] bertm-[tensorname].onnx`
+to add `[tensorname]` to the outputs available through the onnx API. To find `[tensorname]`, `python ./onnx-output-also.py -l bertm.onnx`.
+
+Note that for alignment using mbert you'll want something like the tensor  `/layer.7/output/LayerNorm/Add_1_output_0`
+
 ### Dependencies
 
 First, you need to install the dependencies:
@@ -32,7 +51,7 @@ CUDA_VISIBLE_DEVICES=0 awesome-align \
     --batch_size 32
 ```
 
-This produces outputs in the `i-j` Pharaoh format. A pair `i-j` indicates that the <i>i</i>th word (zero-indexed) of the source sentence is aligned to the <i>j</i>th word of the target sentence. 
+This produces outputs in the `i-j` Pharaoh format. A pair `i-j` indicates that the <i>i</i>th word (zero-indexed) of the source sentence is aligned to the <i>j</i>th word of the target sentence.
 
 You can set `--output_prob_file` if you want to obtain the alignment probability and set `--output_word_file` if you want to obtain the aligned word pairs (in the `src_word<sep>tgt_word` format). You can also set `--cache_dir` to specify where you want to cache multilingual BERT.
 
@@ -128,7 +147,7 @@ See `examples/*.gold` for the example format of the gold alignments. You need to
 The following table shows the alignment error rates (AERs) of our models and popular statistical word aligners on five language pairs. The De-En, Fr-En, Ro-En datasets can be obtained following [this repo](https://github.com/lilt/alignment-scripts), the Ja-En data is from [this link](http://www.phontron.com/kftt/) and the Zh-En data is available at [this link](http://nlp.csai.tsinghua.edu.cn/~ly/systems/TsinghuaAligner/TsinghuaAligner.html). The best scores are in **bold**.
 
 |            | De-En | Fr-En | Ro-En | Ja-En | Zh-En |
-| -| ------- | ------- | ------- | ------- | ------- | 
+| -| ------- | ------- | ------- | ------- | ------- |
 | [fast\_align](https://github.com/clab/fast_align) | 27.0 | 10.5 | 32.1 | 51.1 | 38.1 |
 | [eflomal](https://github.com/robertostling/eflomal) | 22.6 | 8.2 | 25.1 | 47.5 | 28.7 |
 | [Mgiza](https://github.com/moses-smt/mgiza)    | 20.6 | 5.9 | 26.4 | 48.0 | 35.1 |
